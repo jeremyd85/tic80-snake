@@ -9,6 +9,10 @@ function print_table(tab)
 	end
 end
 
+Color = {BLACK = 0, PURPLE = 1, RED = 2, ORANGE = 3, YELLOW = 4, LIGHT_GREEN = 5, 
+	GREEN = 6, DARK_GREEN = 7, DARK_BLUE = 8, BLUE = 9, LIGHT_BLUE = 10, 
+	CYAN = 11, WHITE = 12, LIGHT_GREY = 13, GREY = 14, DARK_GREY = 15}
+
 Directions = {UP = 0, DOWN = 1, LEFT = 2, RIGHT = 3}
 
 InputControl = {_btn = {}}
@@ -86,6 +90,15 @@ function Snake:update(direction)
 	end
 end
 
+function Snake:in_snake(x, y)
+	for _, pos in pairs(self.trail) do
+		if x == pos.x and y == pos.y then
+			return true
+		end
+	end
+	return false
+end
+
 function Snake:head()
 	return self.trail[1]
 end
@@ -102,58 +115,144 @@ function GameState:new(width, height, size)
 	self.height = height
 	self.game_over = false
 	self.score = 0
-	self.size = size
-	self.ic = InputControl:new()
+	self.playing = true
+	self.food = {x = nil, y = nil}
 	self.snake = Snake:new({x = width//2, y = height//2})
 	self.curr_tick = 0
 	self.prev_tick = 0
+	self.growth_rate = 1
+	self:_relocate_food()
 	return self
 end
 
-function GameState:draw_background()
-	cls()
-	local disp_width = self.width * self.size
-	local disp_height = self.height * self.size
-	for i = 0, disp_width, self.size do
-		line(i, disp_height, i, 0, 15)
-	end
-	for i = 0, disp_height, self.size do
-		line(disp_width, i, 0, i, 15)
-	end
+function GameState:_is_game_over(direction)
+	local x_mod, y_mod = next_pos_mod(direction)
+	local new_head = {}
+	new_head.x = self.snake:head().x + x_mod
+	new_head.y = self.snake:head().y + y_mod
+	return self.snake:in_snake(new_head.x, new_head.y) or 
+		(new_head.x > self.width - 1 or 
+		new_head.y > self.height - 1 or 
+		new_head.x < 0 or 
+		new_head.y < 0)
 end
 
-function GameState:draw_snake()
-	for _, pos in pairs(self.snake.trail) do
-		rect(pos.x*self.size+1, pos.y*self.size+1, self.size-1, self.size-1, 12)
-	end
-end
-
-function GameState:update()
-	self.ic:update()
-	direction = self.ic:last_pressed()
-	self.ic:display()
-	self.curr_tick = time()//(1000//2.5)
-	if self.curr_tick > self.prev_tick then
-		if math.random(20) == 5 then
-			self.snake:extend(1)
+function GameState:_relocate_food()
+	local valid_spots = {}
+	-- Adds only coordinates on the board and not the snake
+	for x = 0, self.width - 1 do
+		for y = 0, self.height - 1 do
+			if not self.snake:in_snake(x, y) then
+				table.insert(valid_spots, {x, y})
+			end
 		end
-		self.snake:update(direction)
 	end
+	local location = valid_spots[math.random(#valid_spots)]
+	self.food.x = location[1]
+	self.food.y = location[2]
+end
+
+function GameState:update(direction)
+	self.curr_tick = time()//(1000//2.5)
+	-- Check if it is a game update tick
+	if self.curr_tick <= self.prev_tick or not self.playing then
+		return false
+	end
+	-- Check for game over
+	if self:_is_game_over(direction) then
+		self.game_over = true
+		self.playing = false
+		return false
+	end
+	-- Update snake position
+	self.snake:update(direction)
+	local head = self.snake:head()
+	-- Check if food is eatten
+	if head.x == self.food.x and head.y == self.food.y then
+		self.snake:extend(self.growth_rate)
+		self.score = self.score + self.growth_rate
+		self:_relocate_food()
+	end
+	-- Update prev_tick
 	self.prev_tick = self.curr_tick
+	return true
 end
 
 
-gs = GameState:new(15, 15, 8)
+Display = {}
+function Display:new(game_state)
+	setmetatable({}, Display)
+	self.WIN_WIDTH = 240
+	self.WIN_HEIGHT = 136
+	self.SPRITE_SIZE = 8
+	self.gs = game_state
+	return self
+end
 
+function Display:_draw_grid(x_offset, y_offset, color)
+	local grid_width = gs.width * self.SPRITE_SIZE
+	local grid_height = gs.height * self.SPRITE_SIZE
+	-- Vertical Lines
+	for i = 0, grid_width, self.SPRITE_SIZE do
+		line(i+x_offset, grid_height+y_offset, i+x_offset, y_offset, color)
+	end
+	-- Horizotal Lines
+	for i = 0, grid_height, self.SPRITE_SIZE do
+		line(grid_width+x_offset, i+y_offset, x_offset, i+y_offset, color)
+	end
+end
+
+function Display:_draw_snake(x_offset, y_offset, color)
+	for _, pos in pairs(self.gs.snake.trail) do
+		local x = (pos.x * self.SPRITE_SIZE) + x_offset
+		local y = (pos.y * self.SPRITE_SIZE) + y_offset
+		local w = self.SPRITE_SIZE - 1
+		local h = w
+		-- rect(x, y, w, h, color)
+		spr(0, x, y)
+	end
+end
+
+function Display:_draw_food(x_offset, y_offset, color)
+	local x = (self.gs.food.x * self.SPRITE_SIZE + 2) + x_offset
+	local y = (self.gs.food.y * self.SPRITE_SIZE + 2) + y_offset
+	local w = self.SPRITE_SIZE - 3
+	local h = w
+	rect(x, y, w, h, color)
+	
+end
+
+function Display:game_grid(x_offset, y_offset)
+	cls()
+	-- Display the snake
+	self:_draw_snake(x_offset, y_offset, Color.WHITE)
+	-- Display Food
+	self:_draw_food(x_offset, y_offset, Color.RED)
+	-- Display the game grid
+	self:_draw_grid(x_offset, y_offset, Color.DARK_GREY)
+end
+
+math.randomseed(tstamp())
+
+-- Global objects
+gs = GameState:new(10, 10, 8)
+dis = Display:new(gs)
+ic = InputControl:new()
+
+
+go_cnt = 0
+
+prev_direction = Directions.UP
 
 function TIC()
-	gs:draw_background()
-	gs:draw_snake()
-	gs:update()
+	ic:update()
+	local direction = ic:last_pressed()
+	gs:update(direction)
+    dis:game_grid(15, 36)
 end
 
 function game_tick()
-	return time()//(1000//UPDATE_SPEED)
+	return time() // (1000 // UPDATE_SPEED)
 end
 
 
