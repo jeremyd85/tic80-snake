@@ -3,26 +3,35 @@
 -- desc:   Snake Game
 -- script: lua
 
-function print_table(tab)
-	for k, v in ipairs(tab) do
-		trace(k..": ", v)
-	end
-end
-
 Color = {BLACK = 0, PURPLE = 1, RED = 2, ORANGE = 3, YELLOW = 4, LIGHT_GREEN = 5, 
 	GREEN = 6, DARK_GREEN = 7, DARK_BLUE = 8, BLUE = 9, LIGHT_BLUE = 10, 
 	CYAN = 11, WHITE = 12, LIGHT_GREY = 13, GREY = 14, DARK_GREY = 15}
 
 Directions = {UP = 0, DOWN = 1, LEFT = 2, RIGHT = 3}
 
+Buttons = {A = 4}
+setmetatable(Buttons, Directions)
+
+State = {START_MENU = 0, IN_GAME = 1, GAME_OVER = 2}
+curr_state = State.START_MENU
+
+GRID_WIDTH = 16
+GRID_HEIGHT = 15
+UPDATE_SPEED = 7
+
+math.randomseed(tstamp())
+
 InputControl = {_btn = {}}
+InputControl.__index = InputControl
 function InputControl:new()
-	setmetatable({}, InputControl)
-	self._btn = {}
+	this = {
+		_btn = {}
+	}
 	for _, i in pairs(Directions) do
-		self._btn[i] = {pressed = 0, released = 0}
+		this._btn[i] = {pressed = 0, released = 0}
 	end
-	return self
+	setmetatable(this, self)
+	return this
 end
 
 function InputControl:update()
@@ -38,40 +47,32 @@ function InputControl:update()
 end
 
 function InputControl:last_pressed()
-	local max_dir = -1
-	local max_time = -1
+	local directions = self:directions()
+	table.sort(directions, compare_dir)
+	return directions[#directions].direction
+end
+
+function InputControl:directions()
+	directions = {}
 	for _, i in pairs(Directions) do
-		if self._btn[i].pressed > max_time then
-			max_dir = i
-			max_time = self._btn[i].pressed
-		end
+		table.insert(directions, self._btn[i])
+		directions[#directions].direction = i
 	end
-	return max_dir
-end
-
-function InputControl:display()
-	for k, v in ipairs(Directions) do
-		trace(string.format("%s: pressed = %.3f, released = %.3f", k, self._btn[v].pressed, self._btn[v].released))
-	end
-end
-
-function next_pos_mod(direction)
-	local dir_mod = {}
-	dir_mod[Directions.UP] = {x = 0, y = -1}
-	dir_mod[Directions.DOWN] = {x = 0, y = 1}
-	dir_mod[Directions.LEFT] = {x = -1, y = 0}
-	dir_mod[Directions.RIGHT] = {x = 1, y = 0}
-	return dir_mod[direction].x, dir_mod[direction].y
+	return directions
 end
 
 
 Snake = {length = 1, trail = {}}
+Snake.__index = Snake
 function Snake:new(head)
-	setmetatable({}, Snake)
-	self.length = 1
-	self.trail = {}
-	self.trail[1] = head
-	return self
+	this = {
+		length = 1,
+		trail = {head},
+		orig = head
+	}
+	
+	setmetatable(this, self)
+	return this
 end
 
 function Snake:extend(n)
@@ -81,13 +82,14 @@ end
 function Snake:update(direction)
 	local x_mod, y_mod = next_pos_mod(direction)
 	local new_head = {}
-	new_head.x = self:head().x + (x_mod)
-	new_head.y = self:head().y + (y_mod)
+	new_head.x = self:head().x + x_mod
+	new_head.y = self:head().y + y_mod
 	table.insert(self.trail, 1, new_head)
 	local last_index = #self.trail
 	if last_index > self.length then
 		table.remove(self.trail, last_index)
 	end
+	self.prev_direction = direction
 end
 
 function Snake:in_snake(x, y)
@@ -107,22 +109,32 @@ function Snake:tail()
 	return self.trail[table.maxn(self.trail)]
 end
 
+function Snake:reset()
+	self.trail = {}
+	self.trail[1] = self.orig
+	self.length = 1
+end
 
-GameState = {width = 10, height = 10, size = 8}
-function GameState:new(width, height, size)
-	setmetatable({}, GameState)
-	self.width = width
-	self.height = height
-	self.game_over = false
-	self.score = 0
-	self.playing = true
-	self.food = {x = nil, y = nil}
-	self.snake = Snake:new({x = width//2, y = height//2})
-	self.curr_tick = 0
-	self.prev_tick = 0
-	self.growth_rate = 1
-	self:_relocate_food()
-	return self
+
+GameState = {width = 10, height = 10}
+GameState.__index = GameState
+function GameState:new(width, height)
+	this = {
+		width = width,
+		height = height,
+		game_over = false,
+		score = 0,
+		playing = false,
+		food = {x = nil, y = nil},
+		food_type = 0,
+		snake = Snake:new({x = width//2, y = height//2}),
+		curr_tick = 0,
+		prev_tick = 0,
+		growth_rate = 1
+	}
+	setmetatable(this, self)
+	this:_relocate_food()
+	return this
 end
 
 function GameState:_is_game_over(direction)
@@ -152,8 +164,28 @@ function GameState:_relocate_food()
 	self.food.y = location[2]
 end
 
-function GameState:update(direction)
-	self.curr_tick = time()//(1000//2.5)
+function GameState:_get_direction(input_controler)
+	local dirs = input_controler:directions()
+	table.sort(dirs, compare_dir)
+	if #self.snake.trail > 1 then
+		local prev_head_x = self.snake.trail[2].x
+		local prev_head_y = self.snake.trail[2].y
+		local next_head_x = self.snake:head().x
+		local next_head_y = self.snake:head().y
+
+		local x_mod, y_mod = next_pos_mod(dirs[#dirs].direction)
+		next_head_x = next_head_x + x_mod
+		next_head_y = next_head_y + y_mod
+		if next_head_x == prev_head_x and next_head_y == prev_head_y then
+			return dirs[#dirs-1].direction
+		end
+	end
+	return dirs[#dirs].direction
+end
+
+function GameState:update(input_controler)
+	local direction = self:_get_direction(input_controler)
+	self.curr_tick = game_tick()
 	-- Check if it is a game update tick
 	if self.curr_tick <= self.prev_tick or not self.playing then
 		return false
@@ -172,83 +204,217 @@ function GameState:update(direction)
 		self.snake:extend(self.growth_rate)
 		self.score = self.score + self.growth_rate
 		self:_relocate_food()
+		self.food_type = math.random(5)
 	end
 	-- Update prev_tick
 	self.prev_tick = self.curr_tick
+	self.prev_direction = direction
 	return true
 end
 
-
-Display = {}
-function Display:new(game_state)
-	setmetatable({}, Display)
-	self.WIN_WIDTH = 240
-	self.WIN_HEIGHT = 136
-	self.SPRITE_SIZE = 8
-	self.gs = game_state
-	return self
+function GameState:reset()
+	self.game_over = false
+	self.score = 0
+	self.playing = true
+	self.food = {x = nil, y = nil}
+	self.food_type = 0
+	self.snake:reset()
+	self.growth_rate = 1
+	self:_relocate_food()
 end
 
-function Display:_draw_grid(x_offset, y_offset, color)
-	local grid_width = gs.width * self.SPRITE_SIZE
-	local grid_height = gs.height * self.SPRITE_SIZE
-	-- Vertical Lines
-	for i = 0, grid_width, self.SPRITE_SIZE do
-		line(i+x_offset, grid_height+y_offset, i+x_offset, y_offset, color)
-	end
-	-- Horizotal Lines
-	for i = 0, grid_height, self.SPRITE_SIZE do
-		line(grid_width+x_offset, i+y_offset, x_offset, i+y_offset, color)
-	end
+
+Display = {WIN_WIDTH = 240, WIN_HEIGHT = 136, SPRITE_SIZE = 8}
+Display.__index = Display
+function Display:new(game_state)
+	this = {
+		gs = game_state,
+		start_menu = Menu:new({"Start", "Quit"}),
+		game_over_menu = Menu:new({"Restart", "Start Menu"})
+	}
+	setmetatable(this, self)
+	return this
+end
+
+function Display:_draw_head(x_offset, y_offset, color)
+	local head = self.gs.snake:head()
+	local x = (head.x * self.SPRITE_SIZE) + x_offset + 1
+	local y = (head.y * self.SPRITE_SIZE) + y_offset + 1
+	local w = self.SPRITE_SIZE - 1
+	local h = self.SPRITE_SIZE - 1
+	rect(x, y, w, h, color)
 end
 
 function Display:_draw_snake(x_offset, y_offset, color)
-	for _, pos in pairs(self.gs.snake.trail) do
-		local x = (pos.x * self.SPRITE_SIZE) + x_offset
-		local y = (pos.y * self.SPRITE_SIZE) + y_offset
-		local w = self.SPRITE_SIZE - 1
-		local h = w
-		-- rect(x, y, w, h, color)
-		spr(0, x, y)
-	end
+	local trail = self.gs.snake.trail
+	local x = 0
+	local y = 0
+	local w = 0
+	local h = 0
+	for i = 1, #trail - 1 do
+		local curr_pos = trail[i]
+		local next_pos = trail[i+1]
+		if curr_pos.x < next_pos.x and curr_pos.y == next_pos.y then
+			x = (curr_pos.x * self.SPRITE_SIZE) + x_offset + 1
+			y = (curr_pos.y * self.SPRITE_SIZE) + y_offset + 1
+			w = 2 * self.SPRITE_SIZE - 1
+			h = self.SPRITE_SIZE - 1
+		elseif curr_pos.y < next_pos.y and curr_pos.x == next_pos.x then
+			x = (curr_pos.x * self.SPRITE_SIZE) + x_offset + 1
+			y = (curr_pos.y * self.SPRITE_SIZE) + y_offset + 1
+			w = self.SPRITE_SIZE - 1
+			h = 2 * self.SPRITE_SIZE - 1
+		elseif curr_pos.x > next_pos.x and curr_pos.y == next_pos.y then
+			x = (next_pos.x * self.SPRITE_SIZE) + x_offset + 1
+			y = (next_pos.y * self.SPRITE_SIZE) + y_offset + 1
+			w = 2 * self.SPRITE_SIZE - 1
+			h = self.SPRITE_SIZE - 1
+		elseif curr_pos.y > next_pos.y and curr_pos.x == next_pos.x then
+			x = (next_pos.x * self.SPRITE_SIZE) + x_offset + 1
+			y = (next_pos.y * self.SPRITE_SIZE) + y_offset + 1
+			w = self.SPRITE_SIZE - 1
+			h = 2 * self.SPRITE_SIZE - 1
+		end
+		rect(x, y, w, h, color)
+	end 
 end
 
 function Display:_draw_food(x_offset, y_offset, color)
-	local x = (self.gs.food.x * self.SPRITE_SIZE + 2) + x_offset
-	local y = (self.gs.food.y * self.SPRITE_SIZE + 2) + y_offset
-	local w = self.SPRITE_SIZE - 3
-	local h = w
-	rect(x, y, w, h, color)
-	
+	local x = (self.gs.food.x * self.SPRITE_SIZE) + x_offset + 1
+	local y = (self.gs.food.y * self.SPRITE_SIZE) + y_offset + 1
+	spr(256 + self.gs.food_type, x, y, -1, 1, 0, 0)
 end
 
-function Display:game_grid(x_offset, y_offset)
-	cls()
-	-- Display the snake
-	self:_draw_snake(x_offset, y_offset, Color.WHITE)
-	-- Display Food
+function Display:game(x_offset, y_offset)
+	map(0, 0, 30, 17)
 	self:_draw_food(x_offset, y_offset, Color.RED)
-	-- Display the game grid
-	self:_draw_grid(x_offset, y_offset, Color.DARK_GREY)
+	local snake_color = Color.GREEN
+	if self.gs.game_over then
+		snake_color = Color.DARK_GREY
+	end
+	self:_draw_snake(x_offset, y_offset, snake_color)
+	self:_draw_head(x_offset, y_offset, snake_color)
+	print(self.gs.score, 24*8+5, 26, Color.WHITE, false, 1, true)
+	if self.gs.game_over then
+		return State.GAME_OVER
+	else
+		return curr_state
+	end
 end
 
-math.randomseed(tstamp())
+function Display:disp_start_menu()
+	map(30, 0, 30, 17)
+	local x = 11 * self.SPRITE_SIZE
+	local y = 6 * self.SPRITE_SIZE
+	self.start_menu:display(x, y, 8)
+	self.start_menu:update()
+	local sel = self.start_menu:select()
+	if sel == "Start" then
+		self.gs:reset()
+		return State.IN_GAME
+	elseif sel == "Quit" then
+		exit()
+	else
+		return curr_state
+	end
+end
+
+function Display:game_over()
+	local x = 11 * self.SPRITE_SIZE
+	local y = 4 * self.SPRITE_SIZE
+	spr(272, x, y, -1, 1, 0, 0, 8, 8)
+	print("GAME OVER", x+6, y+6, Color.BLACK)
+	self.game_over_menu:display(x+6, y+24, 8)
+	self.game_over_menu:update()
+	local sel = self.game_over_menu:select()
+	if sel == "Restart" then
+		self.gs:reset()
+		return State.IN_GAME
+	elseif sel == "Start Menu" then
+		return State.START_MENU
+	else
+		return curr_state
+	end
+end
+
+Menu = {}
+Menu.__index = Menu
+function Menu:new(choices)
+	local this = {
+		choices = choices,
+		sel_index = 1,
+		active = false
+	}
+	setmetatable(this, self)
+	return this
+end
+
+function Menu:update()
+	if not self.active then return nil end
+	if btnp(Directions.UP) and self.sel_index > 1 then
+		self.sel_index = self.sel_index - 1
+	elseif btnp(Directions.DOWN) and self.sel_index < #self.choices then
+		self.sel_index = self.sel_index + 1
+	else
+		self.sel_index = self.sel_index
+	end
+end
+
+function Menu:selection()
+	return self.choices[self.sel_index]
+end
+
+function Menu:select()
+	if btnp(Buttons.A) then
+		self.active = false
+		return self:selection()
+	end
+	return nil
+end
+
+function Menu:display(x, y, spacing)
+	local sel = self:selection()
+	for i, choice in pairs(self.choices) do
+		if choice == sel then
+			print(choice, x, y + (i*spacing), Color.WHITE, false, 1, true)
+		else
+			print(choice, x, y + (i*spacing), Color.LIGHT_GREY, false, 1, true)
+		end
+	end
+end
 
 -- Global objects
-gs = GameState:new(10, 10, 8)
+gs = GameState:new(GRID_WIDTH, GRID_HEIGHT)
 dis = Display:new(gs)
 ic = InputControl:new()
 
 
-go_cnt = 0
 
-prev_direction = Directions.UP
+-- function print_table(tab)
+-- 	trace('-----------------------')
+-- 	for name, val in pairs(tab) do
+-- 		if type(val) == "table" then
+-- 			print_table(val)
+-- 		else
+-- 			trace(name.." = "..val)
+-- 		end
+		
+-- 	end
+-- 	trace('-----------------------')
+-- end
 
-function TIC()
-	ic:update()
-	local direction = ic:last_pressed()
-	gs:update(direction)
-    dis:game_grid(15, 36)
+function compare_dir(dir1, dir2)
+	return dir1.pressed < dir2.pressed
+end
+
+function next_pos_mod(direction)
+	local dir_mod = {
+		[Directions.UP] = {x = 0, y = -1},
+		[Directions.DOWN] = {x = 0, y = 1},
+		[Directions.LEFT]  = {x = -1, y = 0},
+		[Directions.RIGHT] = {x = 1, y = 0}
+	}
+	return dir_mod[direction].x, dir_mod[direction].y
 end
 
 function game_tick()
@@ -256,10 +422,174 @@ function game_tick()
 end
 
 
+function TIC()
+	ic:update()
+	if curr_state == State.START_MENU then
+		gs.playing = false
+		dis.start_menu.active = true
+		curr_state = dis:disp_start_menu()
+	elseif curr_state == State.IN_GAME then
+		dis.start_menu.active = false
+		curr_state = dis:game(55, 7)
+		gs:update(ic)
+	end
+
+	if curr_state == State.GAME_OVER then
+		dis.start_menu.active = false
+		gs.playing = false
+		dis.game_over_menu.active = true
+		curr_state = dis:game_over()
+	end
+
+end
+
+
 
 -- <TILES>
--- 000:000000000cccccc00cccccc00cccccc00cccccc00cccccc00cccccc000000000
+-- 002:0000000000000000000000009999999999999999999999999999999999999999
+-- 003:0000000000000000000000009999000099999999999999999999999999999999
+-- 004:0000000000000000000000000000000099900000999999009999999999999999
+-- 005:0000000000000000000000000000000000000000000000000000000099000000
+-- 016:000000002222222d2222222d2222222ddddddddd2222d2222222d2222222d222
+-- 017:000000000222222d0222222d0222222d0ddddddd0222d2220222d2220222d222
+-- 018:9999999999999999999999999999999999999999999999999999999999999999
+-- 019:9999999999999999999999999999999999999999999999999999999999999999
+-- 020:9999999999999999999999999999999999999999999999999999999999999999
+-- 021:9999000099999000999999009999990099999990998889909900889099008890
+-- 032:222d2220222d2220222d2220222d2220dddd2220222d2220222d2220222dddd0
+-- 033:00000000222d2220222d2220222d2220dddd2220222d2220222d2220222dddd0
+-- 034:9999999999999999999999999999999999999999888888888888888800000000
+-- 035:9999999999999999999999999999999999999999888899998888888800888888
+-- 036:9999999999999999999999999999999999999999999999998889999988888899
+-- 037:9900089099900090999000909990000099990000999900009999900099999000
+-- 048:222d2222222d2222222d2222ddddddddd2222222d2222222d222222200000000
+-- 049:222d2220222d2220222d2220ddddddd0d2222220d2222220d222222000000000
+-- 052:0088888800000888000000000000000000000000000000000000000000000000
+-- 053:8889990088889900000889000000899000000890000000900000009000000000
+-- 064:0dddd2220222d2220222d2220222dddd0222d2220222d2220222d2220222d222
+-- 065:0dddd2220222d2220222d2220222dddd0222d2220222d2220222d22200000000
+-- 080:0000000000000000000000000000000000000000000000000000000600000066
+-- 081:0000000000000000000000000000000000000000667776606677666666766666
+-- 082:0000000000000000000000000000000000000000000000000002000022220000
+-- 096:0000066600000666000066660000677700006677000066660000666600006666
+-- 097:6666666666000666600000007000000070000000600000006600000066000000
+-- 098:2222000000002000000000000000000000000000000000000000000000000000
+-- 112:0000066600000666000000660000000700000000000000000000000000000000
+-- 113:6660000067660000776660007766670007666770006677760006666600006666
+-- 114:0000770000007700000077770000777700007700000077000000770060007700
+-- 115:0007707700077077000770770007707777077077770770770077707700777077
+-- 116:0000000700000007770000077700000700770007007700070077000700770007
+-- 117:7000000070000770700007707000077070000770700770007007700070077000
+-- 118:7777770077777700770000007700000077000000770000007700000077000000
+-- 128:0000000000000000000000000060000600666676000007770000000700000000
+-- 129:0000066600000666000776666777776666667766666666006600000000000000
+-- 130:6000770060007700600077006000770000007700000077000000770000000000
+-- 131:0007707700077077000770770007707700077077000770770007707700000000
+-- 132:0000770777777707777777070000770700007707000077070000770700000000
+-- 133:7007700077700000777000007007700070077000700007707000077000000000
+-- 134:7700000077770000777700007700000077000000777777007777770000000000
+-- 144:0000000000000000222222222222222222222222222222222222222222222222
+-- 145:0000000000000000222222222222222222222222222222222222222222222222
+-- 146:0000000000000000222222222222222222222222222222222222222222222222
+-- 147:0000000000000000222222222222222222222222222222222222222222222222
+-- 148:0000000000000000222222222222222222222222222222222222222222222222
+-- 149:0000000000000000222222222222222222222222222222222222222222222222
+-- 150:0000000000000000222222222222222222222222222222222222222222222222
+-- 151:0000000000000000222222222222222222222222222222222222222222222222
 -- </TILES>
+
+-- <SPRITES>
+-- 000:0060000000060000003220000322220003222000022220000022220000000000
+-- 001:00000000000433300043333000433330003333300cc3330000c0000000000000
+-- 002:000000000000000000c400000c244440044442400444444000dddd0000000000
+-- 003:0000070000707770077777700777777000776777000667770006600000060000
+-- 004:0700000077600000076330000033300000333300000033300000003000000000
+-- 005:0003000000334000033440003322420034454500000024400000002000000000
+-- 016:2222ff222222ff222222ff222222ff22ffffffffffffffff2222ffff2222ffff
+-- 017:22ff222222ff222222ff222222ff2222ffffffffffffffffffffffffffffffff
+-- 018:ff2222ffff2222ffff2222ffff2222ffffffffffffffffffffffffffffffffff
+-- 019:2222ff222222ff222222ff222222ff22ffffffffffffffffffffffffffffffff
+-- 020:22ff222222ff222222ff222222ff2222ffffffffffffffffffffffffffffffff
+-- 021:ff2222ffff2222ffff2222ffff2222ffffffffffffffffffffffffffffffffff
+-- 022:2222ff222222ff222222ff222222ff22ffffffffffffffffffffffffffffffff
+-- 023:22ff222222ff222222ff222222ff2222ffffffffffffffffffff2222ffff2222
+-- 032:2222ffff2222ffffffffffffffffffff2222ffff2222ffff2222ffff2222ffff
+-- 033:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 034:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 035:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 036:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 037:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 038:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 039:ffff2222ffff2222ffffffffffffffffffff2222ffff2222ffff2222ffff2222
+-- 048:ffffffffffffffff2222ffff2222ffff2222ffff2222ffffffffffffffffffff
+-- 049:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 050:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 051:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 052:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 053:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 054:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 055:ffffffffffffffffffff2222ffff2222ffff2222ffff2222ffffffffffffffff
+-- 064:2222ffff2222ffff2222ffff2222ffffffffffffffffffff2222ffff2222ffff
+-- 065:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 066:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 067:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 068:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 069:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 070:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 071:ffff2222ffff2222ffff2222ffff2222ffffffffffffffffffff2222ffff2222
+-- 080:2222ffff2222ffffffffffffffffffff2222ffff2222ffff2222ffff2222ffff
+-- 081:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 082:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 083:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 084:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 085:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 086:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 087:ffff2222ffff2222ffffffffffffffffffff2222ffff2222ffff2222ffff2222
+-- 096:ffffffffffffffff2222ffff2222ffff2222ffff2222ffffffffffffffffffff
+-- 097:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 098:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 099:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 100:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 101:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 102:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 103:ffffffffffffffffffff2222ffff2222ffff2222ffff2222ffffffffffffffff
+-- 112:2222ffff2222ffff2222ffff2222ffffffffffffffffffff2222ffff2222ffff
+-- 113:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 114:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 115:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 116:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 117:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 118:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+-- 119:ffff2222ffff2222ffff2222ffff2222ffffffffffffffffffff2222ffff2222
+-- 128:2222ffff2222ffffffffffffffffffff2222ff222222ff222222ff222222ff22
+-- 129:ffffffffffffffffffffffffffffffff22ff222222ff222222ff222222ff2222
+-- 130:ffffffffffffffffffffffffffffffffff2222ffff2222ffff2222ffff2222ff
+-- 131:ffffffffffffffffffffffffffffffff2222ff222222ff222222ff222222ff22
+-- 132:ffffffffffffffffffffffffffffffff22ff222222ff222222ff222222ff2222
+-- 133:ffffffffffffffffffffffffffffffffff2222ffff2222ffff2222ffff2222ff
+-- 134:ffffffffffffffffffffffffffffffff2222ff222222ff222222ff222222ff22
+-- 135:ffff2222ffff2222ffffffffffffffff22ff222222ff222222ff222222ff2222
+-- </SPRITES>
+
+-- <MAP>
+-- 000:000000000000110101010101010101010101010101010112000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 001:000000000000040000000000000000000000000000000002000000000000000000000000000000000005152535455565750000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 002:000000000000040000000000000000000000000000000002202020304050000000000000000000000006162636465666760000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 003:000000000000040000000000000000000000000000000002212121314151000000000000000000000007172737475767770000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 004:000000000000040000000000000000000000000000000002222222324252000000000000000000000008182838485868780000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 005:000000000000040000000000000000000000000000000002000023334353000000000000000000000009192939495969790000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 006:00000000000004000000000000000000000000000000000200000000000000000000000000000000000a1a2a3a4a5a6a7a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 007:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 008:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 009:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 010:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 011:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 012:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 013:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 014:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 015:000000000000040000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 016:000000000000140303030303030303030303030303030313000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- </MAP>
 
 -- <WAVES>
 -- 000:00000000ffffffff00000000ffffffff
@@ -275,20 +605,3 @@ end
 -- 000:1a1c2c5d275db13e53ef7d57ffcd75a7f07038b76425717929366f3b5dc941a6f673eff7f4f4f494b0c2566c86333c57
 -- </PALETTE>
 
--- <TILES>
--- 000:000000000cccccc00cccccc00cccccc00cccccc00cccccc00cccccc000000000
--- </TILES>
-
--- <WAVES>
--- 000:00000000ffffffff00000000ffffffff
--- 001:0123456789abcdeffedcba9876543210
--- 002:0123456789abcdef0123456789abcdef
--- </WAVES>
-
--- <SFX>
--- 000:000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000304000000000
--- </SFX>
-
--- <PALETTE>
--- 000:1a1c2c5d275db13e53ef7d57ffcd75a7f07038b76425717929366f3b5dc941a6f673eff7f4f4f494b0c2566c86333c57
--- </PALETTE>
