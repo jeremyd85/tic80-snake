@@ -18,7 +18,7 @@ curr_state = State.START_MENU
 GRID_WIDTH = 16
 GRID_HEIGHT = 15
 UPDATE_SPEED = 7
-NUM_FOODS = 6
+NUM_FOODS = 8
 
 math.randomseed(tstamp())
 
@@ -77,6 +77,7 @@ function Snake:new(head)
 end
 
 function Snake:extend(n)
+	sfx(0, 'G-2', 4)
 	self.length = self.length + 1
 end
 
@@ -205,7 +206,7 @@ function GameState:update(input_controler)
 		self.snake:extend(self.growth_rate)
 		self.score = self.score + self.growth_rate
 		self:_relocate_food()
-		self.food_type = math.random(NUM_FOODS)
+		self.food_type = math.random(NUM_FOODS - 1)
 	end
 	-- Update prev_tick
 	self.prev_tick = self.curr_tick
@@ -390,20 +391,6 @@ dis = Display:new(gs)
 ic = InputControl:new()
 
 
-
--- function print_table(tab)
--- 	trace('-----------------------')
--- 	for name, val in pairs(tab) do
--- 		if type(val) == "table" then
--- 			print_table(val)
--- 		else
--- 			trace(name.." = "..val)
--- 		end
-		
--- 	end
--- 	trace('-----------------------')
--- end
-
 function compare_dir(dir1, dir2)
 	return dir1.pressed < dir2.pressed
 end
@@ -507,6 +494,7 @@ end
 -- 004:0700000077600000076330000033300000333300000033300000003000000000
 -- 005:0003000000334000033440003322420034454500000024400000002000000000
 -- 006:0000000000344400044443400666566000232200044444400000000000000000
+-- 007:00000000000000260000222700222f2672f222276222f2600762267000077000
 -- 016:2222ff222222ff222222ff222222ff22ffffffffffffffff2222ffff2222ffff
 -- 017:22ff222222ff222222ff222222ff2222ffffffffffffffffffffffffffffffff
 -- 018:ff2222ffff2222ffff2222ffff2222ffffffffffffffffffffffffffffffffff
